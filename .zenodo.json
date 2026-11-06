@@ -1,0 +1,56 @@
+{
+  "title": "cps-update-lab: учебный стенд по целостности обновления ПО киберфизических систем",
+  "upload_type": "software",
+  "version": "0.1.0",
+  "language": "rus",
+  "license": "apache-2.0",
+  "creators": [
+    {
+      "name": "Kuzmin, Alexander",
+      "orcid": "0000-0002-0393-412X"
+    }
+  ],
+  "description": "<p>Учебный стенд по целостности цепочки выпуска и обновления ПО киберфизических систем. Вымышленный поставщик выпускает ПО контроллера резервуара с комплектом свидетельств (подписанные коммиты и теги, аттестации in-toto и SLSA, воспроизводимая и независимая сборка, SBOM, испытания), гейт SCII решает о допуске по графу доказательств и выдаёт квитанцию SCII-R v1, а эмулятор ПЛК с моделью физического процесса устанавливает обновление на одном из трёх уровней защиты: без проверки, с проверкой подписи поставщика или с проверкой квитанции агентом scii-agent.</p><p>11 сценариев по схемам реальных атак из атласа cps-supply-chain-atlas (подмена образа на сервере обновлений, похищенные ключи, компрометация сборочной среды, откат версии, выпуск для другого класса устройств, подложная инженерная станция, несоответствие выпускного архива тегу) и двух границ метода дают 33 исхода; CI сверяет их с ожидаемыми. К стенду прилагаются семь лабораторных работ на русском языке и методические указания.</p>",
+  "keywords": [
+    "software supply chain",
+    "cyber-physical systems",
+    "industrial control systems",
+    "PLC",
+    "firmware update",
+    "SLSA",
+    "evidence graph",
+    "training lab"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/alexqzm/cps-update-lab",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    },
+    {
+      "identifier": "10.5281/zenodo.23833592",
+      "relation": "requires",
+      "resource_type": "software",
+      "scheme": "doi"
+    },
+    {
+      "identifier": "https://github.com/alexqzm/scii-verify",
+      "relation": "requires",
+      "resource_type": "software",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://github.com/alexqzm/cps-supply-chain-atlas",
+      "relation": "references",
+      "resource_type": "dataset",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://github.com/alexqzm/source-match",
+      "relation": "requires",
+      "resource_type": "software",
+      "scheme": "url"
+    }
+  ]
+}

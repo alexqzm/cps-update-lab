@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cps-update-lab"
+dynamic = ["version"]
+description = "Учебный стенд по целостности обновления ПО КФС: поставщик, гейт SCII, эмулятор ПЛК с физическим процессом, сценарии атак и лабораторные работы"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{name = "Alexander Kuzmin"}]
+keywords = ["software supply chain", "cyber-physical systems", "ICS", "PLC", "firmware update", "SLSA",
+            "in-toto", "evidence graph", "training lab"]
+dependencies = [
+  "cryptography>=42",
+  "pyyaml>=6",
+  "scii-gate @ git+https://github.com/alexqzm/scii-gate@d210811f27a9b9302f018faf7f019d38dfbb9227",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pyflakes>=3"]
+
+[project.scripts]
+cpslab = "cpslab.cli:main"
+
+[project.urls]
+Repository = "https://github.com/alexqzm/cps-update-lab"
+
+[tool.hatch.version]
+path = "cpslab/__init__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["cpslab"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/.github", "/docs/img"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

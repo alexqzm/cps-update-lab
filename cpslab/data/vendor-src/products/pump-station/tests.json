@@ -1,0 +1,11 @@
+{
+ "format": "cpslab-tests/1",
+ "process": {"title": "напорная линия", "unit": "бар", "capacity": 10.0, "q_in": 0.2, "low_limit": 0.5, "alarm_high": 9.5},
+ "seconds": 600,
+ "cases": [
+  {"case": "normal-demand", "title": "обычный разбор: давление держится в рабочем диапазоне", "q_out": 0.1, "start": 3.0, "max_below": 6.0},
+  {"case": "no-demand", "title": "разбора нет: насос выключается по уставке", "q_out": 0.0, "start": 3.0},
+  {"case": "high-demand", "title": "повышенный разбор: давление не падает до сухого хода", "q_out": 0.18, "start": 3.0},
+  {"case": "operator-error", "title": "ошибочная уставка high = 99: блокировка не даёт давлению подняться до 8 бар", "q_out": 0.1, "start": 3.0, "write": [1, 99], "max_below": 8.0}
+ ]
+}

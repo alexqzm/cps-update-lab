@@ -1,0 +1,65 @@
+# Живой стенд: сервер обновлений, контроллер (эмулятор ПЛК с резервуаром), HMI оператора.
+# Порты открыты только на 127.0.0.1. Управление — ./lab.sh (см. README).
+name: cps-update-lab
+
+x-lab: &lab
+  image: cps-update-lab:local
+  pull_policy: never
+  volumes:
+    - lab:/lab
+  networks: [lab]
+  read_only: true
+  tmpfs: [/tmp]
+  environment:
+    HOME: /tmp
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  init:
+    <<: *lab
+    build: .
+    command: ["init"]
+
+  update-server:
+    <<: *lab
+    command: ["server", "serve", "--port", "8000"]
+    depends_on:
+      init: {condition: service_completed_successfully}
+
+  device:
+    <<: *lab
+    command: ["device", "serve", "--name", "plc-1", "--update-url", "http://update-server:8000",
+              "--http-port", "8080", "--modbus-port", "5020", "--speed", "${SPEED:-5}"]
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:5020:5020"
+    depends_on:
+      init: {condition: service_completed_successfully}
+      update-server: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/api/status', timeout=3)"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  hmi:
+    <<: *lab
+    command: ["hmi", "serve", "--device", "http://device:8080", "--port", "8081"]
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      device: {condition: service_started}
+
+  # инструменты: действия поставщика, гейта и нарушителя (docker compose run --rm tools ...)
+  tools:
+    <<: *lab
+    profiles: [tools]
+    depends_on:
+      init: {condition: service_completed_successfully}
+
+volumes:
+  lab:
+
+networks:
+  lab:

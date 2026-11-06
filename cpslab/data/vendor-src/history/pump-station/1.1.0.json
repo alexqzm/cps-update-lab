@@ -1,0 +1,17 @@
+{
+ "format": "cpslab-program/1",
+ "name": "pump-station",
+ "title": "Поддержание давления в напорной линии",
+ "setpoints": {
+  "low": {"title": "включить насос при давлении ниже, бар", "default": 2, "register": 0, "min": 1, "max": 3},
+  "high": {"title": "выключить насос при давлении выше, бар", "default": 4, "register": 1, "min": 3, "max": 5},
+  "hh": {"title": "блокировка насоса при давлении, бар", "default": 6, "register": 2, "min": 5, "max": 8}
+ },
+ "rules": [
+  {"when": ["level", "<", "low"], "set": {"pump": true}},
+  {"when": ["level", ">", "high"], "set": {"pump": false}}
+ ],
+ "interlocks": [
+  {"name": "ПАЗ: аварийно высокое давление", "when": ["level", ">=", "hh"], "set": {"pump": false}}
+ ]
+}

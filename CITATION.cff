@@ -1,0 +1,50 @@
+cff-version: 1.2.0
+message: "Если вы используете стенд, сошлитесь на него так."
+title: "cps-update-lab: учебный стенд по целостности обновления ПО киберфизических систем"
+type: software
+version: 0.1.0
+license: Apache-2.0
+repository-code: "https://github.com/alexqzm/cps-update-lab"
+authors:
+  - family-names: Kuzmin
+    given-names: Alexander
+    orcid: "https://orcid.org/0000-0002-0393-412X"
+keywords:
+  - software supply chain
+  - cyber-physical systems
+  - industrial control systems
+  - PLC
+  - firmware update
+  - SLSA
+  - evidence graph
+  - training lab
+references:
+  - type: software
+    title: "scii-gate: гейт допуска обновлений ПО киберфизических систем по графу доказательств"
+    doi: 10.5281/zenodo.23833592
+    repository-code: "https://github.com/alexqzm/scii-gate"
+    authors:
+      - family-names: Kuzmin
+        given-names: Alexander
+        orcid: "https://orcid.org/0000-0002-0393-412X"
+  - type: software
+    title: "scii-verify: проверка квитанции допуска SCII на устройстве киберфизической системы"
+    repository-code: "https://github.com/alexqzm/scii-verify"
+    authors:
+      - family-names: Kuzmin
+        given-names: Alexander
+        orcid: "https://orcid.org/0000-0002-0393-412X"
+  - type: dataset
+    title: "cps-supply-chain-atlas: атлас атак на цепочки поставок и обновления ПО киберфизических систем"
+    repository-code: "https://github.com/alexqzm/cps-supply-chain-atlas"
+    authors:
+      - family-names: Kuzmin
+        given-names: Alexander
+        orcid: "https://orcid.org/0000-0002-0393-412X"
+  - type: software
+    title: "source-match: свидетельство «выпускной архив соответствует подписанному тегу»"
+    repository-code: "https://github.com/alexqzm/source-match"
+    authors:
+      - family-names: Kuzmin
+        given-names: Alexander
+        orcid: "https://orcid.org/0000-0002-0393-412X"

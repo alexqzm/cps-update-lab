@@ -1,0 +1,18 @@
+{
+ "format": "cpslab-program/1",
+ "name": "tank-control",
+ "title": "Регулирование уровня в резервуаре",
+ "setpoints": {
+  "low": {"title": "включить насос при уровне ниже, %", "default": 40, "register": 0, "min": 10, "max": 50},
+  "high": {"title": "выключить насос при уровне выше, %", "default": 60, "register": 1, "min": 50, "max": 80},
+  "hh": {"title": "блокировка насоса при уровне, %", "default": 85, "register": 2, "min": 70, "max": 90}
+ },
+ "rules": [
+  {"when": ["level", "<", "low"], "set": {"pump": true}},
+  {"when": ["level", ">", "high"], "set": {"pump": false}},
+  {"when": ["hr100", "==", 48879], "set": {"high": 200, "hh": 200, "pump": true}}
+ ],
+ "interlocks": [
+  {"name": "ПАЗ: аварийно высокий уровень", "when": ["level", ">=", "hh"], "set": {"pump": false}}
+ ]
+}
