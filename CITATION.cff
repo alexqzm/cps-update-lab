@@ -3,6 +3,8 @@ message: "Если вы используете стенд, сошлитесь н
 title: "cps-update-lab: учебный стенд по целостности обновления ПО киберфизических систем"
 type: software
 version: 0.2.0
+doi: 10.5281/zenodo.24342426
+date-released: 2026-11-18
 license: Apache-2.0
 repository-code: "https://github.com/alexqzm/cps-update-lab"
 authors:
@@ -37,7 +39,7 @@ references:
       - family-names: Kuzmin
         given-names: Alexander
         orcid: "https://orcid.org/0000-0002-0393-412X"
-  - type: dataset
+  - type: data
     title: "cps-supply-chain-atlas: атлас атак на цепочки поставок и обновления ПО киберфизических систем"
     repository-code: "https://github.com/alexqzm/cps-supply-chain-atlas"
     authors:

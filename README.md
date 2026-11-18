@@ -1,6 +1,7 @@
 # cps-update-lab
 
 [![CI](https://github.com/alexqzm/cps-update-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/alexqzm/cps-update-lab/actions/workflows/ci.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24342426.svg)](https://doi.org/10.5281/zenodo.24342426)
 
 Учебный стенд по целостности обновления ПО киберфизических систем (КФС). Вымышленный поставщик
 выпускает ПО контроллера резервуара, гейт SCII решает, допустить ли выпуск, по графу
@@ -263,4 +264,4 @@ and a compromised MCP bridge. Lab exercises are in Russian.
 ## Лицензия и цитирование
 
 Код и документация — Apache License 2.0 ([`LICENSE`](LICENSE)). Как ссылаться на стенд — в
-[`CITATION.cff`](CITATION.cff).
+[`CITATION.cff`](CITATION.cff). Версия 0.2.0 на Zenodo: [10.5281/zenodo.24342426](https://doi.org/10.5281/zenodo.24342426).
