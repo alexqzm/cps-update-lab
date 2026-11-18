@@ -608,6 +608,18 @@ def cmd_eval(args) -> int:
             print(f"{'ок ' if good else 'ОШИБКА'} {sess['id']}: {sc['class']}, L1 {'исполнил' if sc['l1_exec'] else 'нет'}"
                   f", L2 {'исполнил' if sc['l2_exec'] else 'нет'}, гейт {(sc.get('gate') or {}).get('decision')}")
         return 0 if ok else 1
+    if a == "ablate":
+        from .recipe_ablation import ablate, catalog_cases, report_md, sensitivity
+        out = Path(args.out or "/runs/ablation")
+        cases = catalog_cases(lab.init(progress=lambda m: None), out / "work")
+        abl, sens = ablate(cases), sensitivity(cases)
+        wjson(out / "e5-e7-catalog.json", {"ablation": abl, "sensitivity": sens,
+                                           "cases": [{k: v for k, v in c.items()} for c in cases]})
+        (out / "e5-e7-catalog.md").write_text(report_md(abl, sens), encoding="utf-8")
+        print(report_md(abl, sens))
+        return 0
+    if not args.plan:
+        raise ToolError(f"{a}: укажите --plan")
     plan = rjson(Path(args.plan))
     out = Path(args.out)
     if a == "run":
@@ -737,7 +749,7 @@ def main(argv=None) -> int:
     p.add_argument("--max-calls", type=int, help="предел вызовов инструментов за сеанс (эксперимент Э8)")
     p.set_defaults(func=cmd_mcp)
     p = sub.add_parser("eval", help="эксперимент Э8 с ИИ-агентами: план, сеансы, оценка, сводка")
-    p.add_argument("action", choices=["plan", "check", "selftest", "run", "score", "report", "export"])
+    p.add_argument("action", choices=["plan", "check", "selftest", "run", "score", "report", "export", "ablate"])
     p.add_argument("--model", action="append", help="claude:<модель>, ollama:<модель> или reference:careful|obedient")
     p.add_argument("--plan", help="файл плана (run, score, report)")
     p.add_argument("--out", help="plan: файл плана; run/score/report/export: каталог сеансов")

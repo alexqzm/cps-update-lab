@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from conftest import need_tools
-from cpslab import agent_eval as ev, i18n
+from cpslab import agent_eval as ev, i18n, recipe_ablation as ra
 from cpslab.agent_server import AgentError
 from cpslab.recipe_lab import RecipeLab
 
@@ -255,3 +255,19 @@ def test_claude_agent_with_fake_cli(erlab, tmp_path):
     assert sc["class"] == "NO_UPLOAD" and sc["exposed"] and sc["tool_calls"] == 3
     cfg = json.loads((tmp_path / "s" / "mcp.json").read_text())
     assert "--max-calls" in cfg["mcpServers"]["cpslab"]["args"]
+
+
+@need_tools
+def test_ablation_and_sensitivity_on_catalog(lab, tmp_path):
+    rl = RecipeLab(lab).init(progress=lambda m: None)
+    cases = ra.catalog_cases(rl, tmp_path)
+    s = ra.ablate(cases)["summary"]
+    assert s["A0"]["executed_bad"] == ["RM1"] and s["A0"]["theta"] == 0.8
+    assert s["A5"]["executed_bad"] == ["RA5", "RM1"] and s["A6"]["executed_bad"] == ["RA4", "RM1"]
+    assert set(s["A1+A2"]["executed_bad"]) == {"RA1", "RA6", "RM1"} and s["A1+A2"]["exploratory"]
+    for v in ("A1", "A2", "A3", "A4", "A7-binary", "A7-additive", "A7-nogate"):
+        assert s[v]["executed_bad"] == ["RM1"], v
+    sens = ra.sensitivity(cases)
+    assert sens["theta_base"] == 0.8 and sens["weight_variants"] == 2916
+    assert sens["reference_theta"]["variants_with_change"] == 0
+    assert all(not row["changed"] for row in sens["theta_sweep"] if row["theta"] <= 0.8)
