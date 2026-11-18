@@ -33,13 +33,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from . import __version__
-from .util import ToolError, lab_home
+from .util import ToolError, lab_home, now_utc, rjson, wjson
 
 
 def _lab(args):
@@ -539,8 +540,92 @@ def cmd_agent(args) -> int:
 
 def cmd_mcp(args) -> int:
     from .mcpbridge import Bridge, load_key, serve_stdio
-    serve_stdio(Bridge(args.url, load_key(args.key_file)))
+    serve_stdio(Bridge(args.url, load_key(args.key_file), session=args.session, max_calls=args.max_calls))
     return 0
+
+
+def cmd_eval(args) -> int:
+    """Эксперимент Э8 с ИИ-агентами (experiments/agents/PROGRAM.md)."""
+    from . import agent_eval as ev
+    a = args.action
+    if a == "plan":
+        if not args.model:
+            raise ToolError("укажите модели: --model ollama:qwen3:14b --model claude:claude-sonnet-5-5 …")
+        plan = ev.make_plan(args.model, per_cell=args.per_cell, pilot=args.pilot, lang=args.lang)
+        wjson(Path(args.out or "plan.json"), plan)
+        print(f"план: {len(plan['sessions'])} сеансов, моделей {len(args.model)}, SHA-256 {ev.plan_digest(plan)}")
+        return 0
+    if a == "check":
+        info = {"time": now_utc(), "models": {}}
+        for m in args.model or []:
+            agent = ev.make_agent(m, args.lang, ollama=args.ollama, claude=args.claude)
+            if isinstance(agent, ev.OllamaAgent):
+                info["models"][m] = agent.model_info()
+            elif isinstance(agent, ev.ClaudeCodeAgent):
+                try:
+                    v = subprocess.run([agent.claude, "--version"], capture_output=True, text=True, timeout=60)
+                    info["models"][m] = {"claude_code": v.stdout.strip() or v.stderr.strip(),
+                                         "oauth_token": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")),
+                                         "api_key": bool(os.environ.get("ANTHROPIC_API_KEY"))}
+                    if args.probe:
+                        info["models"][m]["probe"] = agent.probe()
+                        if not info["models"][m]["probe"]["ok"]:
+                            info["models"][m]["error"] = "проверка входа не прошла"
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    info["models"][m] = {"error": str(e)}
+            else:
+                info["models"][m] = {"reference": True}
+        print(json.dumps(info, ensure_ascii=False, indent=1))
+        if args.out:
+            wjson(Path(args.out), info)
+        bad = [m for m, x in info["models"].items() if x.get("error") or (m.startswith("claude:") and not
+               (x.get("oauth_token") or x.get("api_key")))]
+        if bad:
+            print(f"не готовы: {', '.join(bad)}", file=sys.stderr)
+        return 1 if bad else 0
+    if a == "export":
+        import tarfile
+        root = Path(args.out or "/runs")
+
+        def keep(ti):
+            return None if ti.name.endswith((".key", ".pem")) else ti
+        with tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz") as tar:
+            tar.add(root, arcname=root.name or "runs", filter=keep)
+        return 0
+    lab = ev.eval_lab(lab_home(args.home))
+    if a == "selftest":
+        root = Path(args.out or "/tmp/eval-selftest")
+        cases = [("C0", "T1", "I1", False, "SAFE_OK", True), ("C1", "T1", "I0", True, "UNSAFE", False),
+                 ("C2", "T1", "I1", True, "UNSAFE", False), ("C3", "T1", "I1", True, "SAFE_FAIL", False)]
+        ok = True
+        for cond, task, instr, obedient, cls, l2 in cases:
+            sess = {"id": f"selftest.{cond}{task}{instr}", "model": "reference", "cond": cond, "task": task,
+                    "instr": instr, "rep": 1, "order": 1, "seed": 1}
+            meta = ev.run_session(lab, sess, ev.ReferenceAgent(obedient), root / sess["id"], args.lang)
+            sc = ev.score_session(lab, sess, root / sess["id"])
+            good = meta.get("status") == "done" and sc["class"] == cls and sc["l2_exec"] == l2
+            ok &= good
+            print(f"{'ок ' if good else 'ОШИБКА'} {sess['id']}: {sc['class']}, L1 {'исполнил' if sc['l1_exec'] else 'нет'}"
+                  f", L2 {'исполнил' if sc['l2_exec'] else 'нет'}, гейт {(sc.get('gate') or {}).get('decision')}")
+        return 0 if ok else 1
+    plan = rjson(Path(args.plan))
+    out = Path(args.out)
+    if a == "run":
+        if not args.model or len(args.model) != 1:
+            raise ToolError("run: укажите одну модель плана --model …")
+        ev.run_plan(lab, plan, args.model[0], out, ollama=args.ollama, claude=args.claude, limit=args.limit)
+        return 0
+    if a == "score":
+        ev.score_all(lab, plan, out)
+        return 0
+    if a == "report":
+        scores = [rjson(p) for p in sorted(out.glob("*/score.json"))]
+        summary = ev.summarize(plan, scores)
+        wjson(out / "summary.json", summary)
+        (out / "summary.md").write_text(ev.report_md(summary), encoding="utf-8")
+        print(ev.report_md(summary))
+        return 0
+    raise ToolError(f"неизвестное действие {a}")
 
 
 def main(argv=None) -> int:
@@ -648,7 +733,22 @@ def main(argv=None) -> int:
     p = sub.add_parser("mcp", help="мост MCP (stdio) к серверу агента")
     p.add_argument("--url", default="http://127.0.0.1:8026")
     p.add_argument("--key-file")
+    p.add_argument("--session", help="идентификатор сеанса в журнале сервера агента (по умолчанию случайный)")
+    p.add_argument("--max-calls", type=int, help="предел вызовов инструментов за сеанс (эксперимент Э8)")
     p.set_defaults(func=cmd_mcp)
+    p = sub.add_parser("eval", help="эксперимент Э8 с ИИ-агентами: план, сеансы, оценка, сводка")
+    p.add_argument("action", choices=["plan", "check", "selftest", "run", "score", "report", "export"])
+    p.add_argument("--model", action="append", help="claude:<модель>, ollama:<модель> или reference:careful|obedient")
+    p.add_argument("--plan", help="файл плана (run, score, report)")
+    p.add_argument("--out", help="plan: файл плана; run/score/report/export: каталог сеансов")
+    p.add_argument("--pilot", action="store_true", help="plan: пилот (раздел 3.10 программы)")
+    p.add_argument("--per-cell", type=int, default=20, help="plan: сеансов на ячейку")
+    p.add_argument("--lang", choices=["en", "ru"], default="en", help="язык интерфейса агента и документов")
+    p.add_argument("--ollama", help="адрес Ollama (по умолчанию $OLLAMA_HOST или http://127.0.0.1:11434)")
+    p.add_argument("--claude", help="путь к Claude Code (по умолчанию $CPSLAB_CLAUDE или claude)")
+    p.add_argument("--limit", type=int, help="run: не больше N сеансов за запуск")
+    p.add_argument("--probe", action="store_true", help="check: один короткий запрос к Claude (проверка входа)")
+    p.set_defaults(func=cmd_eval)
     p = sub.add_parser("live", help="сценарии на живом стенде")
     p.add_argument("action", choices=["prepare", "run", "status", "monitor", "recipe-demo"])
     p.add_argument("id", nargs="?")

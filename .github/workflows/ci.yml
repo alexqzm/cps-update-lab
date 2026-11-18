@@ -108,6 +108,11 @@ jobs:
         run: |
           ./lab.sh matrix
           ./lab.sh recipes
+      - name: Эксперимент Э8 — образ с Claude Code и самопроверка эталонным агентом
+        run: |
+          ./lab.sh eval-build
+          docker compose --profile eval run --rm --no-deps --entrypoint claude eval --version
+          ./lab.sh eval selftest --out /runs/selftest
       - name: source-match в образе (ЛР-6)
         run: |
           set +e

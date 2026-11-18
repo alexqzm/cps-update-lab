@@ -160,8 +160,11 @@ claude mcp add cpslab -- docker compose -f "$PWD/compose.yaml" run --rm -T --no-
 ```
 
 Ключ `agent` имеет уровень Recipe, ключ `observer` — Read (`/lab/agent/keys/observer.key`). Порядок
-работы агента и оператора и протокол эксперимента с ИИ-агентами — в
-[`docs/agent-recipes.md`](docs/agent-recipes.md).
+работы агента и оператора — в [`docs/agent-recipes.md`](docs/agent-recipes.md).
+
+Эксперимент с реальными ИИ-агентами (Э8: локальные модели через Ollama и Claude Code, английский интерфейс
+агента): программа — [`experiments/agents/PROGRAM.md`](experiments/agents/PROGRAM.md), запуск —
+[`docs/agent-eval.md`](docs/agent-eval.md) и `./lab.sh eval …`.
 
 После обновления репозитория пересоберите образ: `./lab.sh build`.
 
