@@ -10,6 +10,10 @@
 #   ./lab.sh approve ИМЯ        оператор: утвердить рецепт живого стенда, получить решение гейта рецептов
 #   ./lab.sh journal            журнал сервера агента и проверка его хеш-цепочки
 #   ./lab.sh cli ...            любая команда cpslab в контейнере инструментов
+#   ./lab.sh eval-build         эксперимент Э8: собрать образ с Claude Code (поверх образа стенда)
+#   ./lab.sh eval-token         эксперимент Э8: получить токен Claude Code (claude setup-token)
+#   ./lab.sh eval ДЕЙСТВИЕ ...  эксперимент Э8: cpslab eval (plan, check, selftest, run, score, report)
+#   ./lab.sh eval-export > ФАЙЛ  эксперимент Э8: архив сеансов (без ключей) в файл .tar.gz
 #   ./lab.sh shell              оболочка в контейнере инструментов: /lab, cosign, gpg, git, scii-agent
 #   ./lab.sh logs | down | reset  журналы | остановить | остановить и удалить данные стенда
 set -euo pipefail
@@ -45,11 +49,18 @@ case "$cmd" in
     tools agent journal --verify
     ;;
   cli) tools "$@" ;;
+  eval-build)
+    docker image inspect cps-update-lab:local >/dev/null 2>&1 || compose build init
+    compose --profile eval build eval
+    ;;
+  eval-token) compose --profile eval run --rm --no-deps --entrypoint claude eval setup-token ;;
+  eval) compose --profile eval run --rm --no-deps eval eval "$@" ;;
+  eval-export) compose --profile eval run --rm --no-deps -T eval eval export --out /runs ;;
   shell) compose run --rm --no-deps --entrypoint bash tools ;;
   logs) compose logs -f "$@" ;;
   down) compose down ;;
   reset) compose down --volumes ;;
   *)
-    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

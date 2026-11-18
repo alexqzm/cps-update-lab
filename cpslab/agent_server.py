@@ -31,11 +31,12 @@ import json
 import re
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import __version__, documents as docs
+from . import __version__, documents as docs, i18n
 from .journal import Journal
 from .recipe import DEFAULT_PLANT, FORMAT, RecipeError, canonical, digest, dry_run, parse, validate
 from .recipestore import DEFAULT_FOLDER, RecipeStore, StoreError
@@ -171,12 +172,14 @@ class HttpDevice:
 
 # ---------------- сервер ----------------
 class AgentServer:
-    def __init__(self, root: Path, device, attest_key=None, plant: dict = None, hooks: dict = None):
+    def __init__(self, root: Path, device, attest_key=None, plant: dict = None, hooks: dict = None,
+                 lang: str = None, data_warning: bool = None):
         self.root = Path(root)
         self.device = device
         self.attest_key = attest_key
         self.plant = dict(DEFAULT_PLANT, **(plant or {}))
         self.hooks = hooks if hooks is not None else {}
+        self._lang, self._data_warning = lang, data_warning
         self.journal = Journal(self.root / "journal.jsonl")
         self.store = RecipeStore(self.root / "recipes")
         self.archive = docs.Archive(self.root / "archive")
@@ -192,13 +195,18 @@ class AgentServer:
             return {"enabled": True, "allow_recipe": True, "allow_manual": False, "keys": []}
         return rjson(self.config_path)
 
-    def init(self, allow_manual: bool = False) -> "AgentServer":
+    def init(self, allow_manual: bool = False, lang: str = None, data_warning: bool = None) -> "AgentServer":
+        """lang и data_warning — язык интерфейса агента и фраза «документы — данные» (эксперимент Э8)."""
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "archive").mkdir(exist_ok=True)
         (self.root / "recipes").mkdir(exist_ok=True)
         if not self.config_path.exists():
-            wjson(self.config_path, {"enabled": True, "allow_recipe": True, "allow_manual": bool(allow_manual),
-                                     "keys": []})
+            cfg = {"enabled": True, "allow_recipe": True, "allow_manual": bool(allow_manual), "keys": []}
+            if lang is not None:
+                cfg["lang"] = lang
+            if data_warning is not None:
+                cfg["data_warning"] = bool(data_warning)
+            wjson(self.config_path, cfg)
         if not (self.root / "mode.json").exists():
             self.set_mode("local", "init")
         return self
@@ -247,14 +255,41 @@ class AgentServer:
         return {**rec, "tier": tier, "tier_configured": rec["tier"]}
 
     # ---------------- вызов инструмента ----------------
+    @property
+    def lang(self) -> str:
+        lang = self._lang or self.config().get("lang") or "ru"
+        return lang if lang in i18n.LANGS else "ru"
+
+    @property
+    def data_warning(self) -> bool:
+        if self._data_warning is not None:
+            return bool(self._data_warning)
+        return bool(self.config().get("data_warning", True))
+
+    def _description(self, t: Tool) -> str:
+        if self.lang == "en":
+            d = i18n.TOOL_EN[t.name]
+            if t.name == "read_document" and self.data_warning:
+                d += i18n.READ_DOCUMENT_DATA["en"]
+            return d
+        if t.name == "read_document" and not self.data_warning:
+            return t.description.replace(i18n.READ_DOCUMENT_DATA["ru"], "")
+        return t.description
+
     def tools(self) -> list:
-        return [{"name": t.name, "tier": t.tier, "mutating": t.mutating, "description": t.description,
-                 "inputSchema": t.schema} for t in TOOLS]
+        out = [{"name": t.name, "tier": t.tier, "mutating": t.mutating, "description": self._description(t),
+                "inputSchema": t.schema} for t in TOOLS]
+        return i18n.translate(out, self.lang)
+
+    def instructions(self) -> str:
+        """Указания для моста MCP (initialize.instructions) на языке интерфейса агента."""
+        return i18n.instructions(self.lang, self.data_warning)
 
     def call(self, key: str, tool: str, args: dict = None, session: str = "default") -> dict:
         args = args or {}
         with self.lock:
             entry = {"session": session, "tool": tool}
+            t0 = time.perf_counter()
             try:
                 who = self.authenticate(key)
                 entry.update({"key": who["name"], "tier": who["tier"]})
@@ -268,11 +303,14 @@ class AgentServer:
                                                      "переключить в remote может только оператор")
                 result = getattr(self, f"_t_{tool}")(who, args, session, entry)
                 entry.setdefault("ok", True)
-                return result
+                return i18n.translate(result, self.lang)
             except AgentError as e:
                 entry.update({"ok": False, "error": e.code})
+                if self.lang == "en":
+                    raise AgentError(e.code, i18n.tr(e.message)) from e
                 raise
             finally:
+                entry["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 3)
                 self.journal.append(entry)
 
     # ---------------- инструменты ----------------
@@ -484,7 +522,8 @@ class _Handler(BaseHTTPRequestHandler):
                 srv.authenticate(self._key())
             except AgentError as e:
                 return self._send(401, {"ok": False, "error": {"code": e.code, "message": e.message}})
-            return self._send(200, {"ok": True, "tools": srv.tools()})
+            return self._send(200, {"ok": True, "tools": srv.tools(), "instructions": srv.instructions(),
+                                    "lang": srv.lang})
         self._send(404, {"ok": False, "error": {"code": "not_found", "message": "нет такого ресурса"}})
 
     def do_POST(self):  # noqa: N802

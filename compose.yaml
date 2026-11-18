@@ -68,8 +68,28 @@ services:
     depends_on:
       init: {condition: service_completed_successfully}
 
+  # эксперимент Э8 с ИИ-агентами (./lab.sh eval …): локальные модели — Ollama на хосте, Claude Code — в образе
+  eval:
+    <<: *lab
+    image: cps-update-lab-eval:local
+    build:
+      context: .
+      dockerfile: docker/eval.Dockerfile
+    profiles: [eval]
+    environment:
+      HOME: /tmp
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - lab:/lab
+      - eval:/runs
+    depends_on:
+      init: {condition: service_completed_successfully}
+
 volumes:
   lab:
+  eval:
 
 networks:
   lab:
