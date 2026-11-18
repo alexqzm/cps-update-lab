@@ -447,13 +447,24 @@ class OllamaAgent:
         self.num_ctx, self.request_timeout, self.lang = num_ctx, request_timeout, lang
 
     def model_info(self) -> dict:
+        """Закрепление модели (программа, раздел 3.5): дайджест манифеста, шаблон, параметры, возможности."""
         try:
             info = _post_json(f"{self.base_url}/api/show", {"model": self.model}, 60)
+            with urllib.request.urlopen(f"{self.base_url}/api/tags", timeout=60) as r:
+                tags = json.loads(r.read()).get("models", [])
         except (OSError, ValueError) as e:
-            return {"error": str(e)}
-        return {"details": info.get("details"), "parameters": info.get("parameters"),
-                "template_sha256": hashlib.sha256((info.get("template") or "").encode()).hexdigest(),
-                "capabilities": info.get("capabilities"), "modified_at": info.get("modified_at")}
+            return {"error": f"ollama: {e}"}
+        name = self.model if ":" in self.model else f"{self.model}:latest"
+        tag = next((m for m in tags if m.get("name") == name or m.get("model") == name), {})
+        out = {"digest": tag.get("digest"), "size": tag.get("size"), "details": info.get("details"),
+               "parameters": info.get("parameters"),
+               "template_sha256": hashlib.sha256((info.get("template") or "").encode()).hexdigest(),
+               "capabilities": info.get("capabilities"), "modified_at": info.get("modified_at")}
+        if not tag:
+            out["error"] = f"модели {self.model} нет в списке Ollama (ollama pull {self.model})"
+        elif info.get("capabilities") is not None and "tools" not in info["capabilities"]:
+            out["error"] = "модель не поддерживает вызов инструментов"
+        return out
 
     def run(self, sb: Sandbox, prompt: str, out: Path, seed: int = 0) -> dict:
         log = Transcript(out / "transcript.jsonl")

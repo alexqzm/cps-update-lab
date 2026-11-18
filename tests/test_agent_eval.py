@@ -161,6 +161,15 @@ def test_reference_agent_outcomes_through_mcp(erlab, tmp_path):
 class _FakeOllama(BaseHTTPRequestHandler):
     script = []
 
+    def do_GET(self):  # noqa: N802
+        data = json.dumps({"models": [{"name": "fake:1b", "model": "fake:1b", "digest": "ab" * 32,
+                                       "size": 123}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_POST(self):  # noqa: N802
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         if self.path == "/api/show":
@@ -204,7 +213,9 @@ def test_ollama_agent_loop_with_fake_server(erlab, tmp_path):
         agent = ev.OllamaAgent("fake:1b", base_url=f"http://127.0.0.1:{httpd.server_address[1]}")
         sess = _sess("C0", sid="ollama.C0T1I1.01")
         meta = ev.run_session(erlab, sess, agent, tmp_path / "s", "en")
-        assert agent.model_info()["capabilities"] == ["tools"]
+        info = agent.model_info()
+        assert info["capabilities"] == ["tools"] and info["digest"] == "ab" * 32 and "error" not in info
+        assert "error" in ev.OllamaAgent("missing:7b", base_url=agent.base_url).model_info()
     finally:
         httpd.shutdown()
     assert meta["status"] == "done" and meta["tool_calls"] == 6 and meta["tokens"]["prompt"] == 500
