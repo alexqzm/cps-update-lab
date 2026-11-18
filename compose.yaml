@@ -1,4 +1,5 @@
-# Живой стенд: сервер обновлений, контроллер (эмулятор ПЛК с резервуаром), HMI оператора.
+# Живой стенд: сервер обновлений, контроллер (эмулятор ПЛК с резервуаром), HMI оператора, сервер агента
+# для подключения ИИ-агента по MCP (мост: docker compose run --rm -T --no-deps tools mcp ...).
 # Порты открыты только на 127.0.0.1. Управление — ./lab.sh (см. README).
 name: cps-update-lab
 
@@ -50,6 +51,15 @@ services:
       - "127.0.0.1:8081:8081"
     depends_on:
       device: {condition: service_started}
+
+  agent-server:
+    <<: *lab
+    command: ["agent", "serve", "--device", "http://device:8080", "--host", "0.0.0.0", "--port", "8026"]
+    ports:
+      - "127.0.0.1:8026:8026"
+    depends_on:
+      init: {condition: service_completed_successfully}
+      device: {condition: service_healthy}
 
   # инструменты: действия поставщика, гейта и нарушителя (docker compose run --rm tools ...)
   tools:

@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "cps-update-lab"
 dynamic = ["version"]
-description = "Учебный стенд по целостности обновления ПО КФС: поставщик, гейт SCII, эмулятор ПЛК с физическим процессом, сценарии атак и лабораторные работы"
+description = "Учебный стенд по целостности обновления ПО КФС: поставщик, гейт SCII, эмулятор ПЛК с физическим процессом, канал рецептов ИИ-агента по MCP, сценарии атак и лабораторные работы"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [{name = "Alexander Kuzmin"}]
 keywords = ["software supply chain", "cyber-physical systems", "ICS", "PLC", "firmware update", "SLSA",
-            "in-toto", "evidence graph", "training lab"]
+            "in-toto", "evidence graph", "training lab", "AI agents", "MCP"]
 dependencies = [
   "cryptography>=42",
   "pyyaml>=6",
@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pyflakes>=3"]
+mcp = ["mcp==2.3.0"]                   # официальный клиент MCP: проверка моста в тестах
 
 [project.scripts]
 cpslab = "cpslab.cli:main"

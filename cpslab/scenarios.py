@@ -20,6 +20,7 @@ from .ews import rogue_download
 from .gate import Gate
 from .image import svn
 from .keys import Keys
+from .recipe_gate import RecipeGate
 from .server import UpdateStore
 from .util import DATA_DIR, rjson, wjson
 from .vendor import Vendor, package_files, release_info
@@ -81,6 +82,7 @@ class Lab:
         self.keys = Keys(self.home)
         self.vendor = Vendor(self.home, self.keys)
         self.gate = Gate(self.home, self.keys, self.vendor.src)
+        self.recipe_gate = RecipeGate(self.home, self.keys)
         self.state_path = self.home / "lab.json"
 
     # ---------------- подготовка ----------------
@@ -91,6 +93,8 @@ class Lab:
         self.vendor.init_repo()
         if not self.gate.policy_path.exists():
             self.gate.init()
+        if not self.recipe_gate.policy_path.exists():
+            self.recipe_gate.init()
         for key in RELEASES:
             if not (self.vendor.releases / key / "bundle.json").exists():
                 progress(f"выпуск {key}")
@@ -148,7 +152,8 @@ class Lab:
         return Device.provision(root, name=f"plc-{run_id}", device_class=device_class, level=level,
                                 gate_pk=self.keys.gate_pk(), policy_digest=self.gate.policy_digest,
                                 epoch=self.gate.epoch, vendor_boot_pk=self.keys.ed25519_pk("vendor_boot"),
-                                image=self.image(initial))
+                                image=self.image(initial), recipe_policy_digest=self.recipe_gate.policy_digest,
+                                recipe_epoch=self.recipe_gate.epoch)
 
     def outcome(self, sid: str, level: int, dev: Device, res: dict, gate_key: str = None, **details) -> Outcome:
         mon = monitor.check(dev.root, self.gate.admitted())

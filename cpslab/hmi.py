@@ -74,10 +74,11 @@ button { font:inherit; padding:6px 12px; border-radius:4px; border:1px solid var
       <div class="row"><span class="k">svn</span><span class="v" id="svn">—</span></div>
       <div class="row"><span class="k">уставки</span><span class="v" id="sp">—</span></div>
       <div class="row"><span class="k">блокировки</span><span class="v" id="il">—</span></div>
+      <div class="row"><span class="k">рецепт</span><span class="v" id="rcp">—</span></div>
     </div>
     <div class="panel" style="margin-top:16px">
       <h2>Журнал контроллера (подписанные отчёты)</h2>
-      <table><thead><tr><th>№</th><th>событие</th><th>путь</th><th>исход</th><th>образ</th></tr></thead>
+      <table><thead><tr><th>№</th><th>событие</th><th>путь</th><th>исход</th><th>дайджест</th></tr></thead>
       <tbody id="log"><tr><td colspan="5" class="muted">нет данных</td></tr></tbody></table>
     </div>
   </section>
@@ -111,9 +112,14 @@ async function tick() {
     $("svn").textContent = st.installed.svn ?? "—";
     $("sp").textContent = Object.entries(p.setpoints).map(([k, v]) => `${k}=${v}`).join(", ") || "—";
     $("il").textContent = p.interlocks.join(", ") || "не активны";
+    const r = st.recipe;
+    const RS = {running: "исполняется", completed: "завершён", failed: "отказ партии", aborted: "прерван"};
+    $("rcp").textContent = r ? `${r.name} r${r.revision}: ${RS[r.status] || r.status}, шаг ${r.step}/${r.steps}` +
+      (r.quality ? `, партия ${r.quality === "ok" ? "в норме" : "брак"}` : "") +
+      (p.manual ? `; насос вручную: ${p.manual}` : "") : (p.manual ? `нет; насос вручную: ${p.manual}` : "нет");
     const reps = await (await fetch("api/reports")).json();
     $("log").innerHTML = reps.slice(-12).reverse().map(r => { const e = r.event;
-      return `<tr><td>${e.seq}</td><td>${esc(e.event)}${e.command ? " " + esc(e.command) : ""}</td><td>${esc(e.path)}</td>
+      return `<tr><td>${e.seq}</td><td>${esc(e.event)}${e.command ? " " + esc(e.command) : ""}${e.recipe ? " " + esc(e.recipe) + " r" + esc(e.revision) : ""}</td><td>${esc(e.path)}</td>
               <td class="acc-${e.accepted}">${e.accepted ? "принято" : "отказ"} (${esc(e.reason)})</td>
               <td>${esc((e.candidate_sha256 || "").slice(0, 12))}</td></tr>`; }).join("");
   } catch (e) { $("ident").textContent = "нет связи с контроллером"; }

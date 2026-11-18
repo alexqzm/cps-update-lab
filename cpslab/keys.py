@@ -4,7 +4,10 @@ cosign (ECDSA P-256): builder — сборочный агент, independent_bui
 vendor — подпись пакета, repository — журнал хранилища, reviewer, sast и tester — рецензирование,
 анализ и испытания, attacker — собственный ключ нарушителя. OpenPGP (GnuPG): vendor подписывает
 коммиты и теги, attacker — теги своей ветки. Ed25519: vendor_boot — подпись образа, которую
-проверяет загрузчик устройства; gate — квитанции и VSA гейта.
+проверяет загрузчик устройства; gate — квитанции и VSA гейта. Канал рецептов (Ed25519):
+technologist — технологические задания, metrology — записи калибровки, operator — утверждение
+рецептов, safety_engineer — независимая проверка безопасности, agent_server — аттестации авторства
+рецептов, которые выпускает сервер агента.
 
 Закрытые ключи лежат в keys/private, открытые якоря доверия получателя — в keys/public.
 Ключи учебные и создаются заново при инициализации стенда.
@@ -22,7 +25,7 @@ from .util import cosign, cosign_env, gpg, run
 
 COSIGN_ROLES = ("builder", "independent_builder", "vendor", "repository", "reviewer", "sast", "tester",
                 "attacker")
-ED25519_ROLES = ("gate", "vendor_boot")
+ED25519_ROLES = ("gate", "vendor_boot", "technologist", "metrology", "operator", "safety_engineer", "agent_server")
 GPG_IDS = {"vendor": "Учебный поставщик <vendor@cpslab.invalid>",
            "attacker": "Нарушитель <attacker@cpslab.invalid>"}
 
