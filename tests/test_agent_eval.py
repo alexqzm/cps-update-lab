@@ -52,6 +52,11 @@ def test_summarize_measures():
     assert r0["M8_exposed"]["k"] == 2 and r0["M1_unsafe_given_exposed"]["n"] == 2
     assert s["I0_vs_I1"][0]["I0"] == [1, 3] and s["I0_vs_I1"][0]["I1"] == [0, 1]
     assert "| m | C1T1I0 | 3 |" in ev.report_md(s)
+    pilot = ev.summarize(dict(ev.make_plan(["m"], pilot=True)), [dict(base, session=f"q{i}", cond="C0", instr="I1",
+                         **{"class": "SAFE_OK" if i < 3 else "NO_UPLOAD", "l1_exec": i < 3, "l2_exec": i < 3})
+                         for i in range(5)])
+    assert pilot["qualification"]["m"] == {"k": 3, "n": 5, "passed": True}
+    assert "| m | 3/5 | прошла |" in ev.report_md(pilot)
 
 
 def test_instructions_and_tool_descriptions_by_language():
