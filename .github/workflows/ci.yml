@@ -42,7 +42,7 @@ jobs:
           cargo "+$RUST_TOOLCHAIN" install --locked --root "$RUNNER_TEMP" \
             --git https://github.com/alexqzm/scii-verify --rev "$SCII_VERIFY_REV" scii-agent
       - name: Установка
-        run: python -m pip install -e ".[test]"
+        run: python -m pip install -e ".[test,mcp]"
       - name: Инструменты
         run: cpslab doctor
       - name: Статический анализ
@@ -57,6 +57,10 @@ jobs:
         run: |
           cpslab init
           cpslab scenario matrix --md docs/results.md --readme README.md --check
+      - name: Канал рецептов — таблица и README совпадают с прогоном
+        env:
+          CPSLAB_HOME: ${{ runner.temp }}/lab
+        run: cpslab recipes matrix --md docs/results-recipes.md --readme README.md --check
 
   docker:
     runs-on: ubuntu-24.04
@@ -79,8 +83,31 @@ jobs:
         run: |
           curl -sSf http://127.0.0.1:8081/ | grep -q "<svg"
           curl -sSf http://127.0.0.1:8081/api/status | grep -q '"name": "plc-1"'
+      - name: Сервер агента и мост MCP
+        run: |
+          key="$(docker compose run --rm --no-deps -T --entrypoint cat tools /lab/agent/keys/observer.key)"
+          curl -sSf -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" \
+            -d '{"tool": "describe_machine"}' http://127.0.0.1:8026/api/call | tee "$RUNNER_TEMP/agent.json"
+          grep -q '"session_tier": "Read"' "$RUNNER_TEMP/agent.json"
+          printf '%s\n' \
+            '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "ci", "version": "0"}}}' \
+            '{"jsonrpc": "2.0", "method": "notifications/initialized"}' \
+            '{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}' \
+            | docker compose run --rm --no-deps -T tools mcp --url http://agent-server:8026 \
+                --key-file /lab/agent/keys/observer.key | tee "$RUNNER_TEMP/mcp.log"
+          grep -q '"protocolVersion": "2025-06-18"' "$RUNNER_TEMP/mcp.log"
+          grep -q '"name": "dry_run"' "$RUNNER_TEMP/mcp.log"
+      - name: Канал рецептов на живом стенде (агент, оператор, гейт, контроллер L2)
+        run: |
+          ./lab.sh cli live recipe-demo --observe 45 | tee "$RUNNER_TEMP/recipe.log"
+          grep -q "гейт рецептов: допуск" "$RUNNER_TEMP/recipe.log"
+          grep -q "агент запускает рецепт: принято OK" "$RUNNER_TEMP/recipe.log"
+          grep -q "рецепт completed, партия ok" "$RUNNER_TEMP/recipe.log"
+          ./lab.sh journal | tail -1 | grep -q '"ok": true'
       - name: Все сценарии в контейнере
-        run: ./lab.sh matrix
+        run: |
+          ./lab.sh matrix
+          ./lab.sh recipes
       - name: source-match в образе (ЛР-6)
         run: |
           set +e

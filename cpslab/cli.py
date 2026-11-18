@@ -15,8 +15,19 @@
   cpslab live prepare A1 --level 2    очистить сервер обновлений, ввести контроллер с исходным выпуском
   cpslab live run A1                  действия поставщика, гейта и нарушителя против живого стенда
   cpslab live status | cpslab live monitor
+  cpslab live recipe-demo --observe 45  канал рецептов на живом стенде: агент, оператор, гейт, контроллер
   cpslab modbus read holding 0 3 | cpslab modbus write 1 150     клиент Modbus/TCP (--target device:5020)
   cpslab ews download КЛЮЧ [--receipt КЛЮЧ]                     загрузка логики с инженерной станции
+
+Канал рецептов ИИ-агента:
+  cpslab recipes list | run RA1 [--level 0|1|2] | matrix [--md FILE] [--readme README.md] [--check]
+  cpslab recipe validate ФАЙЛ [--program КЛЮЧ] | dry-run ФАЙЛ --start 40 [--work-order ФАЙЛ]
+  cpslab recipe report RA1            отчёт гейта рецептов по рецепту сценария
+  cpslab recipe approve ИМЯ [--revision N] --device URL   оператор: утвердить рецепт и получить решение гейта
+  cpslab recipe safety ИМЯ --result APPROVED|REJECTED      инженер по безопасности: заключение q33
+  cpslab agent serve --device URL     сервер агента (порт 8026)
+  cpslab agent key ИМЯ --tier Read|Recipe|Manual | mode remote|local | journal [--verify]
+  cpslab mcp --url URL --key-file ФАЙЛ   мост MCP (stdio) для ИИ-агента
 """
 from __future__ import annotations
 
@@ -37,8 +48,11 @@ def _lab(args):
 
 
 def cmd_init(args) -> int:
+    from . import live
     lab = _lab(args)
     lab.init(progress=lambda m: print(f"· {m}", flush=True))
+    ag = live.setup_agent(lab)
+    print(f"· сервер агента: {ag['root']}, ключи {', '.join(ag['keys'])}, режим {ag['mode']}")
     st = json.loads((lab.home / "lab.json").read_text(encoding="utf-8"))
     print(f"стенд готов: {lab.home}")
     for k, v in st["admissions"].items():
@@ -314,10 +328,219 @@ def cmd_live(args) -> int:
         return 0
     if args.action == "monitor":
         from . import monitor
-        print(json.dumps(monitor.check(live.device_root(lab, args.name), lab.gate.admitted()), ensure_ascii=False,
-                         indent=1))
+        print(json.dumps(monitor.check(live.device_root(lab, args.name), lab.gate.admitted(),
+                                       lab.recipe_gate.admitted()), ensure_ascii=False, indent=1))
         return 0
+    if args.action == "recipe-demo":
+        res = live.recipe_demo(lab, args.agent, args.device, args.observe)
+        ok = res.get("gate") == 0 and (res.get("recipe") or {}).get("quality") == "ok"
+        return 0 if ok else 1
     return 2
+
+
+# ---------------- канал рецептов ----------------
+def _recipe_lab(args):
+    from .recipe_lab import RecipeLab
+    return RecipeLab(_lab(args))
+
+
+def _rfmt(o) -> str:
+    gate = "—" if o.gate is None else str(o.gate)
+    q = {"ok": "в норме", "out_of_spec": "брак", None: "—"}[o.quality]
+    return (f"{o.scenario:<4} L{o.level}  {'принято' if o.accepted else 'отказ':<8} {o.reason:<11} "
+            f"процесс: {o.process:<8} партия: {q:<7} тревога: {'да' if o.alert else 'нет':<3} гейт: {gate}")
+
+
+def cmd_recipes(args) -> int:
+    from .recipe_lab import LEVELS, as_dict, catalog, compare, run_matrix
+    cat = catalog()
+    if args.action == "list":
+        for sid, s in cat.items():
+            print(f"{sid:<4} ЛР-{s['lab']}  {s['title']}")
+        return 0
+    rl = _recipe_lab(args)
+    rl.init(progress=lambda m: print(f"· {m}", flush=True))
+    if args.action == "run":
+        if args.id not in cat:
+            print(f"нет сценария {args.id}", file=sys.stderr)
+            return 2
+        outs = [rl.run(args.id, lv) for lv in (LEVELS if args.level is None else (args.level,))]
+        sc = cat[args.id]
+        print(f"{args.id}: {sc['title']}\n{' '.join(sc['summary'].split())}\n")
+        for o in outs:
+            print(_rfmt(o))
+            rs = o.details.get("recipe") or {}
+            if rs.get("reason"):
+                print(f"       рецепт: {rs['reason']}")
+            for a in o.details["monitor"]["alerts"]:
+                print(f"       монитор: {a['message']}")
+        if args.json:
+            print(json.dumps([as_dict(o) for o in outs], ensure_ascii=False, indent=1))
+        diffs = compare(outs)
+        if diffs:
+            print("\nрасхождения с ожидаемым:", json.dumps(diffs, ensure_ascii=False))
+        return 1 if diffs else 0
+    outs = run_matrix(rl)
+    for o in outs:
+        print(_rfmt(o))
+    diffs = compare(outs)
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(json.dumps([as_dict(o) for o in outs], ensure_ascii=False, indent=1) + "\n",
+                                   encoding="utf-8")
+    from .report import readme_with_recipe_table, recipe_matrix_markdown
+    stale = []
+    for path, make in ((args.md, lambda: recipe_matrix_markdown(rl, outs)),
+                       (args.readme, lambda: readme_with_recipe_table(Path(args.readme).read_text(encoding="utf-8"),
+                                                                      outs))):
+        if not path:
+            continue
+        text = make()
+        cur = Path(path).read_text(encoding="utf-8") if Path(path).exists() else ""
+        if cur != text:
+            if args.check:
+                stale.append(path)
+            else:
+                Path(path).write_text(text, encoding="utf-8")
+    if stale:
+        print(f"устарели: {', '.join(stale)}; выполните cpslab recipes matrix --md docs/results-recipes.md "
+              f"--readme README.md", file=sys.stderr)
+        return 1
+    if diffs:
+        print("\nрасхождения с ожидаемым:\n" + json.dumps(diffs, ensure_ascii=False, indent=1))
+        return 1
+    print(f"\nсовпали с ожидаемыми: {len(outs)} из {len(outs)} исходов")
+    return 0
+
+
+def _program_for(args):
+    if not args.program:
+        return None
+    from .image import read_image
+    return read_image(_artifact(argparse.Namespace(file=args.program, home=args.home), "image"))[1]
+
+
+def cmd_recipe(args) -> int:
+    from .recipe import dry_run, validate
+    if args.action == "validate":
+        res = validate(json.loads(Path(args.target).read_text(encoding="utf-8")), _program_for(args))
+        print(json.dumps(res, ensure_ascii=False, indent=1))
+        return 0 if res["valid"] else 1
+    if args.action == "dry-run":
+        prog = _program_for(args)
+        if prog is None:
+            raise ToolError("для пробного прогона нужна программа контроллера: --program tank-1.1.0")
+        acc = []
+        if args.work_order:
+            from . import documents as docs
+            wo = json.loads(Path(args.work_order).read_text(encoding="utf-8"))
+            acc = (docs.payload_obj(wo) if docs.is_envelope(wo) else wo).get("acceptance", [])
+        res = dry_run(json.loads(Path(args.target).read_text(encoding="utf-8")), prog, args.start, acceptance=acc)
+        print(json.dumps({k: v for k, v in res.items() if k != "plant"}, ensure_ascii=False, indent=1))
+        return 0 if res["ok"] else 1
+    lab = _lab(args)
+    if args.action == "report":
+        rl = _recipe_lab(args)
+        st = rl.state()["scenarios"]
+        if args.target not in st:
+            raise ToolError(f"нет подготовленного сценария {args.target}: cpslab recipes matrix")
+        for label, a in st[args.target]["admissions"].items():
+            print(f"## {args.target}: {label}\n")
+            print((lab.home / a["run"] / "report.md").read_text(encoding="utf-8"))
+        return 0
+    from . import live
+    if args.action == "safety":
+        from . import documents as docs
+        from .recipestore import RecipeStore
+        from .util import wjson
+        path = RecipeStore(live.agent_root(lab) / "recipes").find(args.target, args.revision)
+        if path is None:
+            raise ToolError(f"нет рецепта {args.target}")
+        r = json.loads(path.read_bytes())
+        from .recipe import digest
+        body = {"recipe": {"name": r["name"], "revision": r["revision"], "sha256": digest(r)},
+                "result": args.result, "by": "инженер по безопасности", "comment": args.comment or ""}
+        out = RecipeStore.sidecar(path, "safety")
+        wjson(out, docs.sign(lab.keys.ed25519("safety_engineer"), docs.SAFETY_REVIEW, body))
+        print(f"заключение {args.result} для {path.name}: {out}")
+        return 0
+    # approve: оператор утверждает рецепт живого стенда, гейт рецептов принимает решение
+    from .agent_server import HttpDevice
+    from .recipe_lab import RecipeLab
+    from .recipestore import RecipeStore
+    root = live.agent_root(lab)
+    path = RecipeStore(root / "recipes").find(args.target, args.revision)
+    if path is None:
+        raise ToolError(f"нет рецепта {args.target} в {root / 'recipes'}")
+    dev = HttpDevice(args.device)
+    st, pi = dev.status(), dev.program()
+    fleet = {"device": st["name"], "device_class": st["device_class"], "instance": st.get("instance"),
+             "product": (pi.get("manifest") or {}).get("product"),
+             "program_version": (pi.get("manifest") or {}).get("version"), "program": pi.get("program"),
+             "level": st["process"]["level"]}
+
+    class _Dev:                                   # утверждение привязано к имени устройства
+        config = {"name": st["name"]}
+    if not args.no_approve:
+        RecipeLab(lab).approve(root, path, _Dev, args.work_order)
+    res = lab.recipe_gate.admit(lab.recipe_gate.assemble(root, path, fleet))
+    print(f"{path.name}: гейт рецептов — {res['decision']} (R_min {res['R_min']:.3f}, R_max {res['R_max']:.3f}), "
+          f"квитанция: {'выдана' if res['receipt'] else 'нет'}")
+    for k, v in res["states"].items():
+        print(f"  {k} {v}  {res['reasons'].get(k, '')}")
+    return 0 if res["code"] == 0 else 1
+
+
+def cmd_agent(args) -> int:
+    from . import live
+    from .agent_server import AgentServer, HttpDevice, serve
+    from .journal import Journal
+    lab = _lab(args)
+    root = live.agent_root(lab)
+    if args.action == "serve":
+        if not (root / "server.json").exists():
+            lab.init(progress=lambda m: print(f"· {m}", flush=True))
+            live.setup_agent(lab)
+        srv = AgentServer(root, HttpDevice(args.device), attest_key=lab.keys.ed25519("agent_server"),
+                          plant=lab.recipe_gate.policy.get("plant"))
+        print(f"сервер агента: {args.host}:{args.port}, контроллер {args.device}, режим {srv.mode()}", flush=True)
+        serve(srv, host=args.host, port=args.port)
+        return 0
+    srv = AgentServer(root, None)
+    if args.action == "key":
+        if not args.name:
+            raise ToolError("укажите имя ключа: cpslab agent key ИМЯ --tier Recipe")
+        key = srv.init().add_key(args.name, args.tier, args.folder)
+        kf = root / "keys" / f"{args.name}.key"
+        kf.parent.mkdir(parents=True, exist_ok=True)
+        kf.write_text(key + "\n")
+        print(f"ключ {args.name} ({args.tier}) записан в {kf}")
+        return 0
+    if args.action == "mode":
+        if args.name not in ("remote", "local"):
+            print(f"режим управления: {srv.mode()}")
+            return 0
+        srv.set_mode(args.name, "оператор (cpslab agent mode)")
+        print(f"режим управления: {args.name}")
+        return 0
+    if args.action == "ceiling":
+        srv.set_ceiling(allow_manual=args.name == "manual")
+        print(json.dumps({k: v for k, v in srv.config().items() if k != "keys"}, ensure_ascii=False))
+        return 0
+    j = Journal(root / "journal.jsonl")
+    if args.verify:
+        res = j.verify()
+        print(json.dumps(res, ensure_ascii=False))
+        return 0 if res["ok"] else 1
+    for e in j.entries()[-(args.count or 20):]:
+        print(json.dumps(e, ensure_ascii=False))
+    return 0
+
+
+def cmd_mcp(args) -> int:
+    from .mcpbridge import Bridge, load_key, serve_stdio
+    serve_stdio(Bridge(args.url, load_key(args.key_file)))
+    return 0
 
 
 def main(argv=None) -> int:
@@ -390,14 +613,51 @@ def main(argv=None) -> int:
     p.add_argument("--receipt", help="квитанция: файл или ключ выпуска (по умолчанию без квитанции)")
     p.add_argument("--device", default="http://device:8080")
     p.set_defaults(func=cmd_ews)
+    p = sub.add_parser("recipes", help="сценарии канала рецептов ИИ-агента в модельном времени")
+    p.add_argument("action", choices=["list", "run", "matrix"])
+    p.add_argument("id", nargs="?")
+    p.add_argument("--level", type=int, choices=[0, 1, 2])
+    p.add_argument("--json")
+    p.add_argument("--md")
+    p.add_argument("--readme", help="обновить таблицу рецептов в README между метками recipes:begin/end")
+    p.add_argument("--check", action="store_true", help="проверить, что файлы актуальны, не перезаписывая")
+    p.set_defaults(func=cmd_recipes)
+    p = sub.add_parser("recipe", help="рецепт: проверка, пробный прогон, отчёт гейта, утверждение оператором")
+    p.add_argument("action", choices=["validate", "dry-run", "report", "approve", "safety"])
+    p.add_argument("target", help="файл рецепта, сценарий (report) или имя рецепта (approve)")
+    p.add_argument("--program", help="программа контроллера: файл образа или ключ выпуска (tank-1.1.0)")
+    p.add_argument("--start", type=float, default=40.0, help="уровень в начале пробного прогона, %%")
+    p.add_argument("--work-order", help="dry-run: файл технологического задания; approve: идентификатор")
+    p.add_argument("--revision", type=int)
+    p.add_argument("--device", default="http://device:8080")
+    p.add_argument("--no-approve", action="store_true", help="approve: только решение гейта, без подписи оператора")
+    p.add_argument("--result", choices=["APPROVED", "REJECTED"], default="APPROVED", help="safety: заключение")
+    p.add_argument("--comment")
+    p.set_defaults(func=cmd_recipe)
+    p = sub.add_parser("agent", help="сервер агента: запуск, ключи, режим управления, журнал")
+    p.add_argument("action", choices=["serve", "key", "mode", "ceiling", "journal"])
+    p.add_argument("name", nargs="?", help="key: имя ключа; mode: remote|local; ceiling: recipe|manual")
+    p.add_argument("--tier", choices=["Read", "Recipe", "Manual"], default="Recipe")
+    p.add_argument("--folder", default="shared")
+    p.add_argument("--device", default="http://device:8080")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8026)
+    p.add_argument("--verify", action="store_true")
+    p.add_argument("--count", type=int)
+    p.set_defaults(func=cmd_agent)
+    p = sub.add_parser("mcp", help="мост MCP (stdio) к серверу агента")
+    p.add_argument("--url", default="http://127.0.0.1:8026")
+    p.add_argument("--key-file")
+    p.set_defaults(func=cmd_mcp)
     p = sub.add_parser("live", help="сценарии на живом стенде")
-    p.add_argument("action", choices=["prepare", "run", "status", "monitor"])
+    p.add_argument("action", choices=["prepare", "run", "status", "monitor", "recipe-demo"])
     p.add_argument("id", nargs="?")
     p.add_argument("--level", type=int, choices=[0, 1, 2], default=2)
     p.add_argument("--name", default="plc-1")
     p.add_argument("--device", default="http://device:8080")
     p.add_argument("--modbus", default="device:5020", help="адрес Modbus/TCP контроллера, хост:порт")
     p.add_argument("--observe", type=float, default=20.0, help="сколько секунд наблюдать процесс после действий")
+    p.add_argument("--agent", default="http://agent-server:8026", help="recipe-demo: адрес сервера агента")
     p.set_defaults(func=cmd_live)
 
     args = ap.parse_args(argv)

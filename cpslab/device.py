@@ -12,6 +12,13 @@
 
 Каждая попытка установки и каждая команда управления записываются в отчёт, подписанный ключом
 устройства (заготовка свидетельства s54 и вход контура реагирования, см. monitor.py).
+
+Рецепты партии (recipe.py) приходят от сервера агента. На уровнях 0 и 1 контроллер исполняет любой
+разбираемый рецепт (на уровне 1 статическую проверку выполняет сервер агента), на уровне 2 — только
+с квитанцией допуска SCII-R v1, которую выдал гейт рецептов: scii-agent проверяет её против
+дайджеста рецепта, класса и экземпляра устройства, политики допуска рецептов и наибольшей ревизии
+этого рецепта, уже исполненной на устройстве (антиповтор). Начало и конец каждого рецепта
+записываются в подписанный отчёт вместе с образом программы, на которой он исполнялся.
 """
 from __future__ import annotations
 
@@ -29,6 +36,7 @@ from .modbus import DEVICE_FAILURE, ILLEGAL_ADDRESS, ModbusError
 from .plant import Tank
 from .program import Controller, REGISTERS
 from .receipt import boot_verify, load_key, new_key, parse as parse_receipt, raw_public
+from .recipe import PUMP_MODES, RecipeError, RecipeRun, parse as parse_recipe
 from .util import ToolError, canonical_json, now_utc, rjson, run, scii_agent, sha256_bytes, wjson
 
 LEVELS = {0: "без проверки", 1: "подпись поставщика", 2: "квитанция гейта SCII"}
@@ -37,8 +45,12 @@ REASON_RU = {
     "BOOT_SIG": "подпись образа не принимается загрузчиком", "DENIED": "неверный пароль управления",
     "NO_RECEIPT": "нет квитанции допуска", "FORMAT": "квитанция не разбирается", "KEY": "неизвестный ключ гейта",
     "SIGNATURE": "подпись квитанции неверна", "DECISION": "квитанция не о допуске", "TARGET": "квитанция для другого устройства",
-    "POLICY": "квитанция по другой политике", "ROLLBACK": "откат версии", "SIZE": "длина образа не совпадает с квитанцией",
-    "DIGEST": "дайджест образа не совпадает с квитанцией", "STATE": "нет состояния устройства",
+    "POLICY": "квитанция по другой политике", "ROLLBACK": "откат версии (для рецепта — повтор старой ревизии)",
+    "SIZE": "длина образа или рецепта не совпадает с квитанцией",
+    "DIGEST": "дайджест образа или рецепта не совпадает с квитанцией", "STATE": "нет состояния устройства",
+    "INVALID": "статическая проверка на сервере агента отклонила рецепт", "RECIPE_FORMAT": "рецепт не разбирается",
+    "NO_PROGRAM": "в контроллере нет программы", "BUSY": "исполняется другой рецепт",
+    "BAD_COMMAND": "неизвестная команда или аргументы",
 }
 _AGENT_LINE = re.compile(r"^([A-Z_]+) \((\d+)\)$")
 
@@ -52,6 +64,8 @@ class Device:
         self.lock = threading.RLock()
         self.tank = Tank()
         self.controller = None
+        self.recipe_run = None
+        self.recipe_meta = None
         self.stopped = False
         self.last = None
         img = self.root / "flash" / "image.bin"
@@ -62,7 +76,8 @@ class Device:
     @classmethod
     def provision(cls, root: Path, *, name: str, device_class: int, level: int, gate_pk: bytes, policy_digest: bytes,
                   epoch: int, vendor_boot_pk: bytes, image: bytes, instance: bytes = bytes(16),
-                  mgmt_password: str = "admin") -> "Device":
+                  mgmt_password: str = "admin", recipe_policy_digest: bytes = None,
+                  recipe_epoch: int = 1) -> "Device":
         """Завод: записать конфигурацию, ключ устройства и исходный образ без проверок."""
         root = Path(root)
         (root / "flash").mkdir(parents=True, exist_ok=True)
@@ -71,7 +86,8 @@ class Device:
             "name": name, "device_class": int(device_class), "instance": instance.hex(), "level": int(level),
             "gate_pk": gate_pk.hex(), "key_epoch_lo": 1, "key_epoch_hi": 0xFFFFFFFF,
             "policy_digest": policy_digest.hex(), "vendor_boot_pk": vendor_boot_pk.hex(),
-            "mgmt_password": mgmt_password})
+            "mgmt_password": mgmt_password,
+            "recipe_policy_digest": recipe_policy_digest.hex() if recipe_policy_digest else None})
         sk = new_key(root / "device.pem")
         (root / "device.pk").write_text(raw_public(sk.public_key()).hex() + "\n")
         (root / "flash" / "image.bin").write_bytes(image)
@@ -79,7 +95,8 @@ class Device:
         (root / "reports.jsonl").unlink(missing_ok=True)
         wjson(root / "state.json", {"generation": 1, "installed_svn": manifest["svn"],
                                     "installed_digest": sha256_bytes(image), "installed_version": manifest["version"],
-                                    "product": manifest["product"], "min_policy_epoch": int(epoch), "seq": 0})
+                                    "product": manifest["product"], "min_policy_epoch": int(epoch), "seq": 0,
+                                    "recipe_min_epoch": int(recipe_epoch), "recipe_svn": {}})
         dev = cls(root)
         dev._report("factory", "factory", True, "OK", sha256_bytes(image))
         return dev
@@ -116,16 +133,20 @@ class Device:
         return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
     # ---------------- установка ----------------
-    def _agent(self, image: bytes, receipt: bytes) -> str:
+    def _agent(self, image: bytes, receipt: bytes, policy_digest: str = None, min_epoch: int = None,
+               installed_svn: int = None) -> str:
         c = self.config
+        policy_digest = policy_digest or c["policy_digest"]
+        min_epoch = self.state["min_policy_epoch"] if min_epoch is None else min_epoch
+        installed_svn = self.state["installed_svn"] if installed_svn is None else installed_svn
         with tempfile.TemporaryDirectory(prefix="cpslab-agent-") as d:
             ip, rp = Path(d) / "image.bin", Path(d) / "receipt.scr"
             ip.write_bytes(image)
             rp.write_bytes(receipt)
             r = run([scii_agent(), "--image", ip, "--receipt", rp, "--pk", c["gate_pk"], "--suite", "1",
                      "--epoch-lo", c["key_epoch_lo"], "--epoch-hi", c["key_epoch_hi"], "--board-id", c["device_class"],
-                     "--policy-digest", c["policy_digest"], "--min-epoch", self.state["min_policy_epoch"],
-                     "--installed-svn", hex(self.state["installed_svn"]), "--instance", c["instance"]], check=False)
+                     "--policy-digest", policy_digest, "--min-epoch", min_epoch,
+                     "--installed-svn", hex(installed_svn), "--instance", c["instance"]], check=False)
         m = _AGENT_LINE.match((r.stdout.strip().splitlines() or [""])[0])
         if not m:
             raise ToolError(f"scii-agent: {(r.stderr or r.stdout).strip()[-300:]}")
@@ -149,6 +170,9 @@ class Device:
             except ImageError:
                 return self._reject(path, "IMAGE_FORMAT", digest)
             controller = Controller(program)
+            if self.recipe_run is not None and self.recipe_run.status == "running":
+                self.recipe_run.abort("установлена новая программа")
+                self._recipe_end()
             st = self.state
             if level >= 2:
                 rp = parse_receipt(receipt)
@@ -194,6 +218,9 @@ class Device:
                 self._report("mgmt", "mgmt", False, "DENIED", extra={"command": command})
                 return {"accepted": False, "reason": "DENIED"}
             if command == "factory-reset":
+                if self.recipe_run is not None and self.recipe_run.status == "running":
+                    self.recipe_run.abort("сброс к заводским настройкам")
+                    self._recipe_end()
                 self.controller = None
                 (self.root / "flash" / "image.bin").unlink(missing_ok=True)
                 (self.root / "flash" / "receipt.scr").unlink(missing_ok=True)
@@ -208,6 +235,106 @@ class Device:
             self._report("mgmt", "mgmt", True, "OK", extra={"command": command})
             return {"accepted": True, "reason": "OK"}
 
+    # ---------------- рецепты ----------------
+    def program_info(self) -> dict:
+        """Манифест и программа установленного образа (для сервера агента и гейта рецептов)."""
+        img = self.root / "flash" / "image.bin"
+        if not img.exists():
+            return {"manifest": None, "program": None, "sha256": None}
+        data = img.read_bytes()
+        manifest, program = read_image(data)
+        return {"manifest": manifest, "program": program, "sha256": sha256_bytes(data)}
+
+    def run_recipe(self, data: bytes, receipt: bytes = None, source: str = "agent") -> dict:
+        """Запустить рецепт партии; на уровне 2 — только с квитанцией гейта рецептов."""
+        with self.lock:
+            digest = sha256_bytes(data)
+            if self.controller is None or self.stopped:
+                return self._recipe_reject("NO_PROGRAM", digest, source)
+            if self.recipe_run is not None and self.recipe_run.status == "running":
+                return self._recipe_reject("BUSY", digest, source)
+            try:
+                recipe = parse_recipe(data)
+            except RecipeError:
+                return self._recipe_reject("RECIPE_FORMAT", digest, source)
+            name, rev = recipe["name"], recipe["revision"]
+            svns = self.state.setdefault("recipe_svn", {})
+            serial = None
+            if self.level >= 2:
+                if receipt is None:
+                    return self._recipe_reject("NO_RECEIPT", digest, source, recipe)
+                if not self.config.get("recipe_policy_digest"):
+                    return self._recipe_reject("STATE", digest, source, recipe)
+                reason = self._agent(data, receipt, policy_digest=self.config["recipe_policy_digest"],
+                                     min_epoch=self.state.get("recipe_min_epoch", 1),
+                                     installed_svn=int(svns.get(name, 0)))
+                if reason != "ADMIT":
+                    return self._recipe_reject(reason, digest, source, recipe)
+                rp = parse_receipt(receipt)
+                rev_svn, serial = rp.svn, rp.serial
+                self.state["recipe_min_epoch"] = max(self.state.get("recipe_min_epoch", 1), rp.policy_epoch)
+            else:
+                rev_svn = rev
+            svns[name] = max(int(svns.get(name, 0)), int(rev_svn))
+            wjson(self.root / "state.json", self.state)
+            self.recipe_run = RecipeRun(recipe, self.controller)
+            self.recipe_meta = {"recipe": name, "revision": rev, "recipe_sha256": digest, "receipt_serial": serial,
+                                "source": source}
+            ev = self._report("recipe-start", "recipe", True, "OK", digest, dict(self.recipe_meta))
+            return {"accepted": True, "reason": "OK", "event": ev}
+
+    def _recipe_reject(self, reason: str, digest: str, source: str, recipe: dict = None) -> dict:
+        extra = {"source": source, "recipe_sha256": digest}
+        if recipe:
+            extra.update({"recipe": recipe["name"], "revision": recipe["revision"]})
+        ev = self._report("recipe-reject", "recipe", False, reason, digest, extra)
+        return {"accepted": False, "reason": reason, "event": ev}
+
+    def _recipe_end(self) -> None:
+        st = self.recipe_run.state()
+        self._report("recipe-end", "recipe", st["status"] == "completed", st["status"].upper(),
+                     (self.recipe_meta or {}).get("recipe_sha256"),
+                     {**(self.recipe_meta or {}), "status": st["status"], "quality": st["quality"],
+                      "detail": st["reason"], "max_level": round(self.tank.max_level, 1),
+                      "min_level": round(self.tank.min_level, 1), "alarms": self.tank.alarms()})
+
+    def abort_recipe(self, reason: str = "прервано оператором") -> dict:
+        with self.lock:
+            if self.recipe_run is None or self.recipe_run.status != "running":
+                return {"accepted": False, "reason": "NO_RECIPE"}
+            self.recipe_run.abort(reason)
+            self._recipe_end()
+            return {"accepted": True, "reason": "OK"}
+
+    def recipe_state(self):
+        with self.lock:
+            if self.recipe_run is None:
+                return None
+            return {**self.recipe_run.state(), **(self.recipe_meta or {})}
+
+    def command(self, command: str, args: dict) -> dict:
+        """Ручная команда (уровень доступа Manual сервера агента): режим насоса или запись уставки."""
+        with self.lock:
+            if self.controller is None:
+                return {"accepted": False, "reason": "NO_PROGRAM"}
+            args = args or {}
+            try:
+                if command == "pump" and args.get("mode") in PUMP_MODES:
+                    self.controller.manual = PUMP_MODES[args["mode"]]
+                    value = args["mode"]
+                elif command == "set" and isinstance(args.get("setpoint"), str):
+                    sp = self.controller.sp_defs.get(args["setpoint"])
+                    if sp is None or "register" not in sp:
+                        raise ValueError("нет такой уставки")
+                    value = self.controller.write_register(sp["register"], int(round(float(args["value"]))))
+                else:
+                    raise ValueError("команды: pump {mode: on|off|auto}, set {setpoint, value}")
+            except (ValueError, TypeError, KeyError) as e:
+                self._report("command", "command", False, "BAD_COMMAND", extra={"command": command, "detail": str(e)})
+                return {"accepted": False, "reason": "BAD_COMMAND", "detail": str(e)}
+            self._report("command", "command", True, "OK", extra={"command": command, "args": args, "value": value})
+            return {"accepted": True, "reason": "OK", "value": value}
+
     # ---------------- процесс ----------------
     def reset_process(self, level: float = 50.0) -> None:
         with self.lock:
@@ -217,7 +344,12 @@ class Device:
 
     def step(self, dt: float) -> None:
         with self.lock:
-            pump = self.controller.scan(self.tank.level) if self.controller is not None and not self.stopped else False
+            active = self.controller is not None and not self.stopped
+            if active and self.recipe_run is not None and self.recipe_run.status == "running":
+                self.recipe_run.tick(self.tank.level, dt)
+                if self.recipe_run.status != "running":
+                    self._recipe_end()
+            pump = self.controller.scan(self.tank.level) if active else False
             self.tank.step(pump, dt)
 
     def run_for(self, seconds: float, dt: float = 0.5, events=None) -> Tank:
@@ -281,7 +413,10 @@ class Device:
                 "process": {"level": round(self.tank.level, 1), "pump": self.pump, "alarms": self.tank.alarms(),
                             "outcome": self.tank.outcome(), "max_level": round(self.tank.max_level, 1),
                             "interlocks": list(c.active_interlocks) if c else [],
-                            "setpoints": dict(c.setpoints) if c else {}},
+                            "setpoints": dict(c.setpoints) if c else {},
+                            "manual": None if c is None or c.manual is None else ("on" if c.manual else "off")},
+                "recipe": None if self.recipe_run is None else {**self.recipe_run.state(), **(self.recipe_meta or {})},
+                "instance": self.config["instance"],
                 "last_event": self.last,
             }
 
@@ -311,6 +446,10 @@ class _Api(BaseHTTPRequestHandler):
             return self._send(200, dev.status())
         if self.path == "/api/reports":
             return self._send(200, dev.reports()[-50:])
+        if self.path == "/api/program":
+            return self._send(200, dev.program_info())
+        if self.path == "/api/recipe":
+            return self._send(200, {"recipe": dev.recipe_state()})
         self._send(404, {"error": "нет такого ресурса"})
 
     def do_POST(self):  # noqa: N802
@@ -328,6 +467,14 @@ class _Api(BaseHTTPRequestHandler):
             if self.path == "/api/process/reset":
                 dev.reset_process(float(body.get("level", 50.0)))
                 return self._send(200, {"ok": True})
+            if self.path == "/api/recipe/run":
+                data = base64.b64decode(body["recipe"])
+                receipt = base64.b64decode(body["receipt"]) if body.get("receipt") else None
+                return self._send(200, dev.run_recipe(data, receipt, str(body.get("source") or "agent")))
+            if self.path == "/api/recipe/abort":
+                return self._send(200, dev.abort_recipe(str(body.get("reason") or "прервано")))
+            if self.path == "/api/command":
+                return self._send(200, dev.command(str(body.get("command")), body.get("args") or {}))
         except (ValueError, KeyError, TypeError) as e:
             return self._send(400, {"error": str(e)})
         except ToolError as e:

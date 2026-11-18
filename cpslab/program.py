@@ -123,6 +123,7 @@ class Controller:
         self.reg_to_sp = {sp["register"]: n for n, sp in self.sp_defs.items() if "register" in sp}
         self.raw = {}
         self.pump = False
+        self.manual = None                  # ручной режим насоса: True/False от рецепта или команды, None — правила
         self.active_interlocks: list = []
 
     # --- регистры хранения (Modbus) ---
@@ -165,10 +166,14 @@ class Controller:
                 self.setpoints[target] = float(value)
 
     def scan(self, level: float) -> bool:
-        for rule in self.program.get("rules", []):
-            a, op, b = rule["when"]
-            if OPS[op](self._value(a, level), self._value(b, level)):
-                self._apply(rule["set"])
+        """Цикл сканирования: правила (или ручной режим насоса), затем блокировки ПАЗ с приоритетом."""
+        if self.manual is None:
+            for rule in self.program.get("rules", []):
+                a, op, b = rule["when"]
+                if OPS[op](self._value(a, level), self._value(b, level)):
+                    self._apply(rule["set"])
+        else:
+            self.pump = bool(self.manual)
         self.active_interlocks = []
         for rule in self.program.get("interlocks", []):
             a, op, b = rule["when"]
