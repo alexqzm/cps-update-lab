@@ -143,6 +143,16 @@ claude mcp add cpslab -- docker compose -f "$PWD/compose.yaml" run --rm -T --no-
     mcp --url http://agent-server:8026 --key-file /lab/agent/keys/agent.key
 ```
 
+Без клиента MCP те же инструменты доступны через HTTP API сервера агента:
+
+```bash
+KEY="$(docker compose run --rm --no-deps -T --entrypoint cat tools /lab/agent/keys/agent.key)"
+curl -s -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"tool": "read_document", "args": {"name": "WO-2026-014.json"}}' http://127.0.0.1:8026/api/call
+curl -s -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"tool": "start_recipe", "args": {"name": "batch-prep"}}' http://127.0.0.1:8026/api/call
+```
+
 Ключ `agent` имеет уровень Recipe, ключ `observer` — Read. Новый ключ: `./lab.sh cli agent key
 student-1 --tier Recipe` (ключ записывается в `/lab/agent/keys/student-1.key`). Для сценария внедрения
 допишите в `/lab/agent/archive/shift-notes.txt` указание, например из `cpslab/recipe_lab.py`
